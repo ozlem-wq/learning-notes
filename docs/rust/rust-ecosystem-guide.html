@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rust Ekosistem Rehberi</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #08080d; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState } = React;
+
+/* WHY RUST? DATA */
+const whyRustSections = [
+  {
+    id: "perf",
+    icon: "⚡",
+    title: "Performans & Bellek",
+    color: "#e44d26",
+    points: [
+      "GC (Garbage Collector) yok — Go, Java, C#, Python gibi dillerde GC \"stop-the-world\" pause'ları yapar. Rust'ta ownership sistemi compile-time'da bellek güvenliğini sağlar, runtime overhead sıfır.",
+      "Zero-cost abstractions — yüksek seviye kod yazarsın ama compile sonrası C/C++ seviyesinde performans alırsın. Iterator, generics, trait'ler sıfır overhead.",
+      "Predictable latency — GC pause olmadığı için p99/p999 latency spike'ları yok. Discord tam bu yüzden Go'dan Rust'a geçti: tail latency tamamen ortadan kalktı.",
+      "Bellek kullanımı düşük — JVM'de her object'in 16-byte header'ı var. Rust'ta struct'lar C-layout ile pack'lenir. Aynı veri için 2-5x az RAM.",
+      "SIMD ve low-level kontrol — CPU cache locality, memory alignment, manual SIMD. ripgrep bunun sayesinde grep'ten 10x hızlı.",
+    ],
+    comparison: {
+      title: "Benchmark Karşılaştırma",
+      rows: [
+        { metric: "HTTP req/s", rust: "900K+", go: "450K", node: "80K", java: "350K", python: "15K" },
+        { metric: "Bellek (idle server)", rust: "2-5 MB", go: "8-15 MB", node: "30-50 MB", java: "100-200 MB", python: "25-40 MB" },
+        { metric: "Cold start", rust: "1-5 ms", go: "5-15 ms", node: "50-200 ms", java: "500-3000 ms", python: "100-500 ms" },
+        { metric: "Container image", rust: "5-15 MB", go: "10-25 MB", node: "150-300 MB", java: "200-400 MB", python: "100-250 MB" },
+        { metric: "p99 latency jitter", rust: "Yok", go: "GC pause", node: "Event loop", java: "GC pause", python: "GIL + GC" },
+      ],
+    },
+  },
+  {
+    id: "safety",
+    icon: "🛡️",
+    title: "Güvenlik",
+    color: "#00d4aa",
+    points: [
+      "Microsoft: CVE'lerin %70'i memory safety hatalarından. Rust bu kategorinin tamamını compile-time'da elimine ediyor.",
+      "Borrow checker — use-after-free, double-free, dangling pointer, data race Rust'ta İMKANSIZ. Kod compile olduysa bu hatalar yoktur.",
+      "Thread safety garantili — \"fearless concurrency\". Send ve Sync trait'leri sayesinde data race compile-time'da yakalanır.",
+      "No null pointer — Option<T> ile null değer açıkça handle edilmek zorunda. NullPointerException diye bir kavram yok.",
+      "NSA, CISA, White House Rust'ı memory-safe dil olarak resmi olarak önerdi. Linux kernel'e Rust desteği eklendi.",
+    ],
+    comparison: {
+      title: "Güvenlik Karşılaştırma",
+      rows: [
+        { metric: "Memory safety", rust: "Compile ✅", go: "GC ✅", node: "GC ✅", java: "GC ✅", python: "GC ✅" },
+        { metric: "Thread safety", rust: "Compile ✅", go: "Runtime ⚠️", node: "Single ⚠️", java: "Runtime ⚠️", python: "GIL ⚠️" },
+        { metric: "Null safety", rust: "Option ✅", go: "nil ❌", node: "undef ❌", java: "NPE ❌", python: "None ❌" },
+        { metric: "Buffer overflow", rust: "İmkansız ✅", go: "Korumalı ✅", node: "Korumalı ✅", java: "Korumalı ✅", python: "Korumalı ✅" },
+        { metric: "Data race", rust: "İmkansız ✅", go: "Mümkün ⚠️", node: "N/A", java: "Mümkün ⚠️", python: "GIL ⚠️" },
+      ],
+    },
+  },
+  {
+    id: "k8s",
+    icon: "☸️",
+    title: "Kubernetes & Container",
+    color: "#326ce5",
+    points: [
+      "Static binary — tek dosya, runtime dependency yok. Node.js'de node_modules, Java'da JVM gerekir. Rust'ta sadece binary.",
+      "Container image: 5-15 MB (scratch/distroless) vs Node.js 150-300 MB vs Java 200-400 MB. RKE2'de disk ve pull time'da dramatik fark.",
+      "Cold start: 1-5 ms. Serverless ve auto-scaling senaryolarında kritik. Java'nın 500ms-3s cold start'ı ile karşılaştır.",
+      "Pod başına RAM: Rust 2-5 MB idle. Node.js 30-50 MB, Java 100-200 MB. Aynı node'a 10-20x daha fazla pod sığar.",
+      "CPU efficiency: Aynı iş yükü için 2-5x az CPU. Cluster maliyeti doğrudan düşer.",
+      "OOM kill riski düşük — bellek öngörülebilir, GC spike yok. HPA daha stabil çalışır.",
+    ],
+    comparison: {
+      title: "Kubernetes Kaynak Karşılaştırma",
+      rows: [
+        { metric: "Image boyutu", rust: "5-15 MB", go: "10-25 MB", node: "150-300 MB", java: "200-400 MB", python: "100-250 MB" },
+        { metric: "Pod idle RAM", rust: "2-5 MB", go: "8-15 MB", node: "30-50 MB", java: "100-200 MB", python: "25-40 MB" },
+        { metric: "Pod/node yoğunluğu", rust: "Çok yüksek", go: "Yüksek", node: "Orta", java: "Düşük", python: "Orta" },
+        { metric: "Cold start", rust: "1-5 ms", go: "5-15 ms", node: "50-200 ms", java: "500-3s", python: "100-500 ms" },
+        { metric: "OOM riski", rust: "Çok düşük", go: "Düşük", node: "Orta", java: "Yüksek", python: "Orta" },
+      ],
+    },
+  },
+  {
+    id: "adopt",
+    icon: "🏢",
+    title: "Kim Kullanıyor?",
+    color: "#ffd700",
+    points: [],
+    adoptions: [
+      { company: "Microsoft", emoji: "🪟", from: "C/C++", to: "Rust", why: "CVE'lerin %70'i memory safety hatası", result: "2030 hedefi: tüm C/C++ → Rust. AI ile \"1 mühendis, 1 ay, 1M satır\"", year: "2022→" },
+      { company: "Discord", emoji: "💬", from: "Go", to: "Rust", why: "GC pause'ları her 2 dk'da latency spike", result: "Tail latency tamamen düzeldi. Aynı HW'de 10x kullanıcı", year: "2020" },
+      { company: "X (Twitter)", emoji: "𝕏", from: "Scala/Java", to: "Rust", why: "JVM bellek overhead + GC, milyarlarca ranking kararı", result: "home-mixer, thunder, phoenix artık Rust", year: "2023" },
+      { company: "Cloudflare", emoji: "☁️", from: "C (Nginx)", to: "Rust (Pingora)", why: "C'deki memory bug'ları + Nginx mimarisi yetersiz", result: "Trilyonlarca req/gün, memory bug sıfır", year: "2022" },
+      { company: "AWS", emoji: "🟠", from: "C", to: "Rust", why: "VM izolasyonu için C'nin güvenlik riskleri", result: "Firecracker (microVM): Lambda & Fargate altyapısı", year: "2018" },
+      { company: "Dropbox", emoji: "📦", from: "Go", to: "Rust", why: "Dosya sync performansı ve bellek verimliliği", result: "Milyarlarca dosya ops, bellek kullanımı dramatik düştü", year: "2016" },
+      { company: "Figma", emoji: "🎨", from: "TypeScript", to: "Rust + WASM", why: "Multiplayer engine performansı tarayıcıda yetersiz", result: "Native performans tarayıcıda, 10M+ kullanıcı", year: "2021" },
+      { company: "Meta", emoji: "Ⓜ️", from: "Python/C++", to: "Rust", why: "Source control ve build system performansı", result: "Sapling (SCM), Buck2 (build), Mononoke (Hg)", year: "2021" },
+      { company: "Google", emoji: "🔍", from: "C/C++/Java", to: "Rust", why: "Android memory safety, Chromium güvenliği", result: "Android HAL, Chromium bileşenleri, Fuchsia OS", year: "2021" },
+      { company: "1Password", emoji: "🔐", from: "Çoklu dil", to: "Rust", why: "Her platform için ayrı kod yazma maliyeti", result: "Tek Rust core → iOS, Android, Win, Mac, Linux, Web", year: "2019" },
+      { company: "Linux Kernel", emoji: "🐧", from: "C only", to: "C + Rust", why: "Yeni driver'larda memory safety", result: "Rust resmi olarak kernel dili. Linus onayı.", year: "2022" },
+      { company: "Shopify", emoji: "🛒", from: "Ruby/JS", to: "Rust + WASM", why: "Storefront rendering performansı", result: "WASM ile 10x hızlı storefront rendering", year: "2023" },
+    ],
+    comparison: null,
+  },
+  {
+    id: "future",
+    icon: "🚀",
+    title: "Gelecek & Vizyon",
+    color: "#a855f7",
+    points: [
+      "Rust Foundation — Mozilla, AWS, Google, Microsoft, Huawei kurucular. Aktif fonlama ve yönetişim. Dilin geleceği büyük şirketler tarafından destekleniyor.",
+      "Linux Kernel entegrasyonu — 2022'den beri Rust resmi kernel dili. Yeni driver'lar Rust ile yazılabiliyor. Bu, Rust'ın 30+ yıl daha yaşayacağının garantisi.",
+      "WASM (WebAssembly) — Rust, WASM'a compile eden en iyi dil. Edge computing, serverless, browser — WASM'ın büyümesi = Rust'ın büyümesi.",
+      "AI/ML inference — Python training yapar, Rust serve eder. ONNX Runtime, candle, burn — inference tarafında Rust payı artıyor.",
+      "US Government desteği — NSA, CISA, White House memory-safe dilleri (özellikle Rust'ı) resmi olarak öneriyor. Devlet ihaleleri için avantaj.",
+      "Embedded & IoT — Embassy framework ile bare-metal async. Otomotiv, havacılık, tıp cihazları — güvenlik kritik sistemlerde C'ye alternatif.",
+      "Yıllık %40 GitHub büyüme — Stack Overflow'da 9 yıl üst üste #1 sevilen dil. Topluluk hızla büyüyor.",
+    ],
+    comparison: null,
+  },
+  {
+    id: "weak",
+    icon: "⚠️",
+    title: "Dezavantajlar & Çözümler",
+    color: "#ff6b6b",
+    points: [],
+    weaknesses: [
+      {
+        problem: "Öğrenme Eğrisi Çok Dik",
+        detail: "Borrow checker, lifetime'lar, ownership modeli yeni başlayanlar için ciddi engel. İlk 2-3 ay verimlilik düşük.",
+        combo: "Python veya Go ile temelleri öğren, sonra Rust'a geç. Ya da sadece performance-critical bileşenlerde kullan.",
+        tools: "Başlangıç: rustlings → Rust Book → Exercism → İlk proje: CLI tool (clap)",
+      },
+      {
+        problem: "Compile Süresi Uzun",
+        detail: "Büyük projelerde incremental build 10-30 sn. Full build dakikalar. CI/CD yavaşlar.",
+        combo: "cargo-watch ile hot-reload. sccache ile cache. mold linker ile 5-10x hızlı link. CI'da Rust cache action.",
+        tools: "cargo-watch, sccache, mold linker, cargo-nextest",
+      },
+      {
+        problem: "Frontend Ekosistemi Olgunlaşmadı",
+        detail: "Leptos, Yew, Dioxus güçlü ama React/Vue ekosistemi ile karşılaştırılamaz. UI kit, component library az.",
+        combo: "Rust backend (Axum) + React/Next.js frontend. ts-rs ile Rust struct → TypeScript type otomatik. Type safety kaybetmezsin.",
+        tools: "Axum + React + ts-rs + Meilisearch",
+      },
+      {
+        problem: "ML/AI Ekosistemi Küçük",
+        detail: "PyTorch, TensorFlow Python'da. Rust'ta candle, burn var ama model çeşitliliği ve community küçük.",
+        combo: "Training: Python (PyTorch/JAX). Serving/inference: Rust (ONNX Runtime). Training'de Python, production'da Rust.",
+        tools: "Python → ONNX export → Rust ort (inference) → Axum API",
+      },
+      {
+        problem: "Rapid Prototyping Yavaş",
+        detail: "Python'da 1 saatte yazacağın MVP, Rust'ta borrow checker ile 1 gün sürebilir.",
+        combo: "MVP: Python/Node.js/Go ile yaz, product-market fit bul, sonra kritik parçaları Rust ile yeniden yaz. Discord, Figma, Dropbox bunu yaptı.",
+        tools: "MVP: Loco (Rust Rails) veya Node.js/Python → Scale: Axum + SQLx",
+      },
+      {
+        problem: "Async Complexity",
+        detail: "Pin, Future, lifetime in async diğer dillere göre karmaşık. Async trait'ler uzun süre unstable kaldı.",
+        combo: "Tokio ekosisteminde kal (Axum, Tonic, SQLx). Mümkünse sync tercih et, async sadece I/O-bound işlerde.",
+        tools: "Tokio + Axum (iyi abstraction) + tracing (debug)",
+      },
+      {
+        problem: "Ekip Bulma Zorluğu",
+        detail: "Rust developer sayısı Go, Python, Java, JS'e göre çok daha az. Bulmak zor ve maliyetli.",
+        combo: "Kritik servisleri Rust, geri kalanı ekibin bildiği dilde yaz. Polyglot microservice: Rust gateway + Node.js/Go iş servisleri.",
+        tools: "Tonic (gRPC) ile diller arası servis iletişimi",
+      },
+      {
+        problem: "Library Eksikliği",
+        detail: "npm'de 2M+ paket, crates.io'da ~150K crate. Bazı niş alanlarda kütüphane bulmak zor.",
+        combo: "FFI ile C/C++ library'lerini Rust'tan çağır. bindgen ile otomatik binding. PyO3 ile Python, napi-rs ile Node.js entegrasyonu.",
+        tools: "bindgen (C→Rust), PyO3 (Python↔Rust), napi-rs (Node↔Rust)",
+      },
+    ],
+    comparison: null,
+  },
+  {
+    id: "when",
+    icon: "🎯",
+    title: "Ne Zaman Rust?",
+    color: "#06b6d4",
+    points: [],
+    scenarios: [
+      { scenario: "Yüksek performanslı API / microservice", verdict: "✅ Rust", reason: "Düşük latency, düşük RAM, küçük container. Axum + SQLx." },
+      { scenario: "CLI araçları", verdict: "✅ Rust", reason: "Tek static binary, hızlı, cross-platform. clap + serde." },
+      { scenario: "Sistem programlama, OS, driver", verdict: "✅ Rust", reason: "C/C++ yerine memory-safe alternatif. Linux kernel desteği." },
+      { scenario: "Network araçları, proxy, DNS", verdict: "✅ Rust", reason: "Tokio async, düşük latency. Cloudflare'ın tercihi." },
+      { scenario: "Embedded / IoT", verdict: "✅ Rust", reason: "no_std, bare-metal. Embassy. FTTH saha cihazları." },
+      { scenario: "WebAssembly", verdict: "✅ Rust", reason: "WASM'a compile eden en iyi dil. Figma, Shopify." },
+      { scenario: "K8s operator / controller", verdict: "✅ Rust", reason: "kube-rs ile düşük kaynak operator'lar." },
+      { scenario: "Hızlı MVP / prototip", verdict: "⚠️ Hibrit", reason: "MVP: Python/Node → Scale: kritik parçaları Rust'a taşı." },
+      { scenario: "Frontend web", verdict: "⚠️ Hibrit", reason: "Rust backend + React frontend. Ya da Leptos tek dil." },
+      { scenario: "ML model training", verdict: "❌ Python", reason: "PyTorch/JAX. Ama inference: Rust (ONNX)." },
+      { scenario: "Script / otomasyon", verdict: "❌ Python", reason: "Compile gereksiz. Python veya n8n workflow." },
+      { scenario: "Kurumsal CRUD", verdict: "⚠️ Duruma göre", reason: "Ekip biliyorsa Loco. Yoksa Rails/Django/Spring." },
+    ],
+    comparison: null,
+  },
+];
+
+/* CATEGORIES DATA */
+const categories = [
+  {
+    id: "web", icon: "🌐", title: "Web Frameworks", subtitle: "HTTP & API Temelleri", color: "#e44d26",
+    items: [
+      { name: "Axum", desc: "Tokio ekibinin framework'ü. En popüler. Hyper üzerine kurulu, düşük bellek, mükemmel DX. WebSocket, gRPC, middleware.", stars: "20k+", status: "🔥 En Popüler", useCase: "API, microservice, real-time" },
+      { name: "Actix Web", desc: "Raw throughput lider. Actor model. En yüksek concurrent connection. Axum'dan biraz daha karmaşık.", stars: "23k+", status: "⚡ En Hızlı", useCase: "Yüksek trafikli API, performance-critical" },
+      { name: "Rocket", desc: "Convention-over-configuration. Rails/Django benzeri. Stable Rust'ta çalışıyor. Basit syntax.", stars: "24k+", status: "✅ Stabil", useCase: "Hızlı prototipleme, CRUD" },
+      { name: "Loco", desc: "Rails'in Rust versiyonu. Batteries-included. Auth, migration, worker queue dahil.", stars: "5k+", status: "🆕 Yeni", useCase: "Full-stack, admin paneli, hızlı MVP" },
+      { name: "Poem", desc: "Minimalist, ergonomik. OpenAPI spec otomatik. Production-ready.", stars: "4k+", status: "🎯 Minimal", useCase: "API-first, OpenAPI entegrasyonu" },
+    ],
+    benchmark: "Axum: 1M request → 6 saniye | Node.js/Express aynı iş yükünde 10-50x daha yavaş",
+  },
+  {
+    id: "frontend", icon: "🌍", title: "Frontend", subtitle: "WASM, SSR & Desktop UI", color: "#a855f7",
+    items: [
+      { name: "Leptos", desc: "React benzeri full-stack. Fine-grained reactivity. SSR + hydration + island. Axum entegre.", stars: "18k+", status: "🔥 Trend", useCase: "Full-stack, SPA, SSR" },
+      { name: "Yew", desc: "React-inspired. En eski ve en çok yıldızlı Rust frontend. Virtual DOM.", stars: "31k+", status: "✅ Olgun", useCase: "SPA, component UI" },
+      { name: "Dioxus", desc: "React benzeri: web + desktop + mobile + TUI. Tek codebase. Hot-reload.", stars: "23k+", status: "🚀 Cross-Platform", useCase: "Web, desktop, mobile, terminal" },
+      { name: "Tauri", desc: "Electron alternatifi. Rust backend + web frontend. 10x küçük, 10x az RAM. Native OS.", stars: "88k+", status: "⭐ Mega Popüler", useCase: "Desktop app, Electron yerine" },
+      { name: "Trunk", desc: "WASM build tool. Yew, Leptos, Dioxus ile. Webpack/Vite benzeri.", stars: "4k+", status: "🔧 Araç", useCase: "WASM build, asset bundling" },
+      { name: "Perseus", desc: "Next.js benzeri meta-framework. SSR, SSG, incremental. i18n.", stars: "3k+", status: "📦 Meta", useCase: "Statik site, blog, çok dilli" },
+    ],
+    benchmark: "Figma, Shopify Rust + WASM kullanıyor. Tauri: 88k+ GitHub stars.",
+  },
+  {
+    id: "backend", icon: "⚙️", title: "Backend", subtitle: "ORM, Auth, Async, Serialization", color: "#f97316",
+    items: [
+      { name: "Tokio", desc: "Async runtime temeli. Axum, Tonic, Hyper hepsi bunun üzerine. Multi-threaded, work-stealing.", stars: "28k+", status: "🏗️ Temel", useCase: "Tüm async uygulamalar" },
+      { name: "SQLx", desc: "Async SQL. Compile-time query checking! PostgreSQL, MySQL, SQLite. Type-safe raw SQL.", stars: "14k+", status: "⭐ Favori", useCase: "DB erişimi, compile-time güvenlik" },
+      { name: "SeaORM", desc: "Async ORM. ActiveRecord. Migration, relation, pagination. SQLx üzerine.", stars: "7k+", status: "✅ Stabil", useCase: "ORM, hızlı CRUD, migration" },
+      { name: "Diesel", desc: "En olgun ORM. Compile-time query. Type-safe schema. Sync ama güvenilir.", stars: "13k+", status: "🏛️ Olgun", useCase: "Production ORM, strong typing" },
+      { name: "Serde", desc: "Serialization/deserialization. JSON, TOML, YAML, MessagePack. Ekosistem omurgası.", stars: "9k+", status: "🏗️ Temel", useCase: "Veri dönüştürme, config, API I/O" },
+      { name: "Reqwest", desc: "HTTP client. Tokio async. TLS, cookie, proxy, multipart.", stars: "10k+", status: "📡 Client", useCase: "API çağrıları, webhook, scraping" },
+      { name: "Tera / Askama", desc: "Template engine. Tera: Jinja2 runtime. Askama: compile-time, sıfır overhead.", stars: "3k+/4k+", status: "📝 Template", useCase: "SSR, email şablonları" },
+      { name: "jsonwebtoken + argon2", desc: "JWT + password hashing. Auth altyapısının temel taşları.", stars: "2k+/500+", status: "🔑 Auth", useCase: "Kimlik doğrulama, parola" },
+    ],
+    benchmark: "SQLx: Sorgu doğruluğu derleme zamanında kontrol edilir — runtime hata riski sıfır.",
+  },
+  {
+    id: "db", icon: "🗄️", title: "Database'ler", subtitle: "Rust ile Yazılmış DB'ler", color: "#00d4aa",
+    items: [
+      { name: "SurrealDB", desc: "Document-graph DB. SQL, GraphQL, ACID, WebSocket, full-text, geospatial. TiKV ile 100+ TB. Embed edilebilir.", stars: "28k+", status: "🔥 Trend", useCase: "Real-time, multi-model, K8s" },
+      { name: "TiKV", desc: "Distributed transactional KV. CNCF graduated. SurrealDB backend. Raft consensus.", stars: "15k+", status: "✅ Production", useCase: "Distributed storage, scale" },
+      { name: "Qdrant", desc: "Vector database. AI/embedding similarity. Filtering + payload. gRPC/REST.", stars: "22k+", status: "🤖 AI-Ready", useCase: "Semantic search, RAG, AI" },
+      { name: "Meilisearch", desc: "Full-text search. Elasticsearch alternatifi. Typo-tolerant, instant. Düşük kaynak.", stars: "48k+", status: "⚡ Hızlı", useCase: "Arama, autocomplete" },
+      { name: "Databend", desc: "Cloud-native data warehouse. Snowflake alternatifi. S3-native.", stars: "8k+", status: "☁️ Cloud", useCase: "Analytics, data warehouse" },
+      { name: "Neon", desc: "Serverless PostgreSQL. Storage layer Rust. Branching, auto-scaling.", stars: "15k+", status: "🐘 Postgres", useCase: "Serverless PG, branching" },
+    ],
+    benchmark: "SurrealDB + TiKV: RKE2'de FTTH network topolojisi için graph query desteği.",
+  },
+  {
+    id: "micro", icon: "🔧", title: "Microservices & Cloud", subtitle: "Servis Altyapısı & Orkestrasyon", color: "#ff6b6b",
+    items: [
+      { name: "Tonic", desc: "gRPC framework. Tokio. HTTP/2, bi-directional streaming, TLS, interceptor.", stars: "10k+", status: "✅ Production", useCase: "Service-to-service, RPC" },
+      { name: "Tower", desc: "Service abstraction. Middleware. Rate limit, retry, timeout, load balancing.", stars: "4k+", status: "🏗️ Temel", useCase: "Middleware, resilience" },
+      { name: "OpenTelemetry SDK", desc: "Observability. Prometheus, Jaeger, OTLP. Distributed tracing, metrics.", stars: "2k+", status: "📊 Monitor", useCase: "Observability, Grafana" },
+      { name: "kube-rs", desc: "K8s client & controller. CRD, operator pattern. RKE2 için.", stars: "3k+", status: "☸️ K8s", useCase: "K8s operator, controller" },
+      { name: "Shuttle", desc: "Rust-native cloud deploy. cargo shuttle deploy tek komut.", stars: "7k+", status: "🚀 Deploy", useCase: "Hızlı deploy, serverless" },
+      { name: "NATS / rdkafka / Lapin", desc: "Messaging: NATS pub/sub, Kafka streaming, RabbitMQ queue.", stars: "çeşitli", status: "📨 Msg", useCase: "Event-driven, pub/sub, queue" },
+    ],
+    benchmark: "Container: 5-15MB (static binary) vs 200MB+ (Node.js). Cold start: milisaniyeler.",
+  },
+  {
+    id: "network", icon: "🔐", title: "Networking & Security", subtitle: "FTTH / CCNP / Infra", color: "#06b6d4",
+    items: [
+      { name: "Pingora (Cloudflare)", desc: "Nginx alternatifi. HTTP proxy. Trilyonlarca req/gün.", stars: "23k+", status: "⚡ Production", useCase: "Reverse proxy, LB" },
+      { name: "Rustls", desc: "TLS implementasyonu. OpenSSL alternatifi. Memory-safe, ring crypto.", stars: "6k+", status: "🔒 Güvenli", useCase: "TLS/SSL, HTTPS" },
+      { name: "Hickory DNS", desc: "DNS server/client. Async, DNSSEC.", stars: "4k+", status: "✅ Stabil", useCase: "DNS, resolver, DNSSEC" },
+      { name: "Embassy", desc: "Embedded async. Bare-metal, no_std. ESP32, STM32, nRF.", stars: "6k+", status: "📡 Embedded", useCase: "IoT, FTTH saha ekipmanı" },
+      { name: "libp2p", desc: "P2P networking. NAT traversal, mDNS, gossipsub.", stars: "5k+", status: "🌐 P2P", useCase: "P2P, mesh networking" },
+      { name: "pcap / pnet", desc: "Packet capture, low-level networking. Raw socket.", stars: "2k+", status: "🔬 Low-Level", useCase: "Packet analysis, monitoring" },
+    ],
+    benchmark: "Cloudflare tüm proxy altyapısını Rust'a taşıdı. Trilyonlarca req/gün.",
+  },
+  {
+    id: "aiml", icon: "🤖", title: "AI/ML", subtitle: "Inference, Vector Search, Pipeline", color: "#06b6d4",
+    items: [
+      { name: "ort (ONNX Runtime)", desc: "Rust'ta ONNX model inference. PyTorch/JAX'ta eğitilen modelleri ONNX'e export et, Rust'ta serve et. GIL yok, GC yok, 10-100x düşük latency.", stars: "1k+", status: "⚡ Inference", useCase: "Model serving, production inference" },
+      { name: "candle (Hugging Face)", desc: "PyTorch benzeri tensor framework, tamamen Rust. LLM inference, embedding, fine-tuning. HF kendi production'ında kullanıyor.", stars: "16k+", status: "🔥 Trend", useCase: "LLM inference, embedding gen" },
+      { name: "burn", desc: "Rust-native deep learning. Backend-agnostic: CPU, CUDA, WASM. PyTorch'un Rust karşılığı olmayı hedefliyor.", stars: "9k+", status: "🆕 Gelişiyor", useCase: "Training + inference in Rust" },
+      { name: "Qdrant", desc: "En popüler open-source vector DB. RAG pipeline'ın kalbi. gRPC + REST. Filtering, payload, multi-tenancy.", stars: "22k+", status: "🤖 Vector DB", useCase: "Semantic search, RAG, embedding" },
+      { name: "Meilisearch", desc: "Hybrid search: keyword + semantic. AI arama uygulamalarında embedding ile birlikte. Typo-tolerant, instant.", stars: "48k+", status: "⚡ Hybrid", useCase: "AI search, autocomplete" },
+      { name: "SurrealDB ML", desc: "SurrealDB'de doğrudan ML model inference. Veri + model aynı yerde. Edge deployment için ideal.", stars: "28k+", status: "🧠 Built-in", useCase: "Edge ML, embedded inference" },
+      { name: "rust-bert", desc: "BERT, GPT-2, T5, BART ve diğer transformer'lar Rust'ta. Sentiment, NER, summarization, translation.", stars: "3k+", status: "✅ NLP", useCase: "NLP tasks, transformer inference" },
+      { name: "WASM + AI", desc: "Rust modelleri WASM'a compile → tarayıcıda veya edge'de inference. Privacy-first: veri sunucuya gitmez.", stars: "—", status: "🌐 Edge", useCase: "Browser AI, IoT inference, privacy" },
+    ],
+    benchmark: "Python scientist eğitir, Rust engineer serve eder. Inference latency: Rust 0.5-5ms vs Python 10-100ms.",
+    aiExtra: {
+      comparison: {
+        title: "AI/ML Inference Karşılaştırma",
+        rows: [
+          { metric: "Inference latency", rust: "0.5-5 ms", go: "2-15 ms", node: "5-30 ms", java: "3-20 ms", python: "10-100 ms" },
+          { metric: "Concurrent req", rust: "Çok yüksek", go: "Yüksek", node: "Orta", java: "Yüksek", python: "GIL kısıtlı" },
+          { metric: "Bellek/model", rust: "Minimal", go: "Düşük", node: "Orta", java: "Yüksek (JVM)", python: "Yüksek (GC)" },
+          { metric: "ONNX desteği", rust: "ort ✅", go: "onnxruntime-go", node: "onnxruntime-node", java: "onnxruntime ✅", python: "Native ✅" },
+          { metric: "GPU support", rust: "CUDA (candle) ✅", go: "Sınırlı ⚠️", node: "Sınırlı ⚠️", java: "DL4J ⚠️", python: "Full ✅" },
+          { metric: "Edge/WASM", rust: "Mükemmel ✅", go: "WASM ⚠️", node: "Yok ❌", java: "Yok ❌", python: "Yok ❌" },
+        ],
+      },
+      pipeline: [
+        { phase: "1. Training", tool: "Python (PyTorch / JAX)", note: "Zengin ekosistem, GPU tam, model zoo geniş" },
+        { phase: "2. Export", tool: "ONNX / SafeTensors", note: "Framework-agnostic format" },
+        { phase: "3. Inference", tool: "Rust (Axum + ort)", note: "0.5-5ms, GIL yok, memory-safe" },
+        { phase: "4. Vector", tool: "Qdrant (Rust)", note: "Embedding similarity, RAG" },
+        { phase: "5. Search", tool: "Meilisearch (Rust)", note: "Keyword + semantic birlikte" },
+        { phase: "6. Orch", tool: "n8n + Webhooks", note: "Görsel workflow → Rust endpoint" },
+        { phase: "7. Edge", tool: "Rust → WASM", note: "Tarayıcı / IoT inference" },
+      ],
+    },
+  },
+  {
+    id: "cli", icon: "🖥️", title: "CLI Araçları", subtitle: "Terminal Dünyası (Zaten Rust)", color: "#ffd93d",
+    items: [
+      { name: "ripgrep (rg)", desc: "grep 10x hızlı. Regex, .gitignore.", stars: "50k+", status: "🏆", useCase: "Metin arama" },
+      { name: "fd", desc: "find alternatifi. Hızlı, renkli, kolay.", stars: "35k+", status: "🏆", useCase: "Dosya arama" },
+      { name: "bat", desc: "cat + syntax highlighting + git + satır no.", stars: "50k+", status: "🏆", useCase: "Dosya görüntüleme" },
+      { name: "eza", desc: "ls + renk + ikon + git + tree.", stars: "13k+", status: "🏆", useCase: "Dizin listeleme" },
+      { name: "starship", desc: "Cross-shell prompt. Hızlı, özelleştirilebilir.", stars: "46k+", status: "🏆", useCase: "Prompt" },
+      { name: "zoxide", desc: "cd akıllı atlama, frecency.", stars: "23k+", status: "🏆", useCase: "Dizin navigasyonu" },
+      { name: "delta", desc: "Git diff + syntax + yan yana.", stars: "24k+", status: "🏆", useCase: "Git diff" },
+      { name: "zellij", desc: "tmux modern, plugin sistemi.", stars: "22k+", status: "🏆", useCase: "Terminal yönetimi" },
+      { name: "bottom (btm)", desc: "htop grafikli monitör.", stars: "10k+", status: "🏆", useCase: "Sistem monitör" },
+      { name: "tokei", desc: "Kod satır sayacı, dil bazlı.", stars: "11k+", status: "🏆", useCase: "Kod istatistik" },
+      { name: "clap", desc: "CLI arg parser. Derive macro. Kendi tool'ların.", stars: "14k+", status: "🔧", useCase: "CLI geliştirme" },
+    ],
+    benchmark: "Zaten birçoğunu Fedora'da kullanıyorsun. clap ile kendi tool'larını yaz.",
+  },
+];
+
+/* STACKS DATA */
+const stacks = [
+  {
+    name: "🦀 Pure Rust Full-Stack", tag: "Tamamen Rust", tagColor: "#e44d26",
+    desc: "Sıfır JavaScript. Frontend, backend, DB hepsi Rust.",
+    layers: [
+      { role: "Frontend", tool: "Leptos", note: "SSR + WASM" },
+      { role: "Framework", tool: "Axum", note: "Leptos entegre" },
+      { role: "ORM", tool: "SeaORM / SQLx", note: "Compile-time check" },
+      { role: "Database", tool: "SurrealDB", note: "Embed, graph+doc" },
+      { role: "Auth", tool: "jwt + argon2", note: "JWT + hash" },
+      { role: "Messaging", tool: "NATS", note: "Async pub/sub" },
+      { role: "Search", tool: "Meilisearch", note: "Full-text" },
+      { role: "Deploy", tool: "Docker 5MB", note: "Static binary" },
+    ],
+    pros: "Tek dil, max performans, min kaynak", cons: "Eğri dik, frontend immatür", ideal: "Performance-critical, tek dev",
+  },
+  {
+    name: "⚡ Rust + React", tag: "Hibrit — En Pratik", tagColor: "#00ff7f",
+    desc: "React/Next.js frontend + Rust backend. En geniş ekosistem.",
+    layers: [
+      { role: "Frontend", tool: "React / Next.js", note: "Geniş ekosistem" },
+      { role: "API", tool: "Axum + Tonic", note: "REST + gRPC" },
+      { role: "ORM", tool: "SQLx / SeaORM", note: "Type-safe DB" },
+      { role: "Database", tool: "PostgreSQL (Neon)", note: "Serverless" },
+      { role: "Search", tool: "Meilisearch", note: "Instant search" },
+      { role: "Cache", tool: "Redis + deadpool", note: "Async pool" },
+      { role: "Types", tool: "ts-rs / specta", note: "Rust→TS otomatik" },
+      { role: "Realtime", tool: "WebSocket", note: "Tungstenite" },
+    ],
+    pros: "Geniş frontend, kolay dev bulma", cons: "İki dil, build karmaşık", ideal: "Ekip, SaaS, startup MVP",
+  },
+  {
+    name: "🖥️ Tauri Desktop", tag: "Desktop App", tagColor: "#a855f7",
+    desc: "Electron'a 10x üstün. Rust backend + web frontend.",
+    layers: [
+      { role: "Shell", tool: "Tauri v2", note: "Sistem webview" },
+      { role: "Frontend", tool: "React/Vue/Svelte", note: "JS framework" },
+      { role: "State", tool: "Tauri State", note: "Rust state mgmt" },
+      { role: "Database", tool: "SQLite", note: "Embedded, sıfır setup" },
+      { role: "IPC", tool: "Tauri Commands", note: "JS↔Rust type-safe" },
+      { role: "FS", tool: "Tauri FS Plugin", note: "Güvenli dosya" },
+      { role: "Package", tool: "Tauri Bundler", note: "MSI/DMG/AppImage" },
+      { role: "Update", tool: "Tauri Updater", note: "Built-in update" },
+    ],
+    pros: "10x küçük, 10x az RAM, native OS", cons: "Webview farkları", ideal: "FTTH planlama, dashboard, tool",
+  },
+  {
+    name: "📡 Event-Driven Microservices", tag: "Dağıtık Sistem", tagColor: "#ff6b6b",
+    desc: "K8s-native, event-driven. Yüksek throughput.",
+    layers: [
+      { role: "Gateway", tool: "Axum + Tower", note: "Rate limit, auth" },
+      { role: "Service", tool: "Tonic (gRPC)", note: "Service mesh" },
+      { role: "Events", tool: "Kafka / NATS", note: "Stream, persistent" },
+      { role: "Database", tool: "SurrealDB + TiKV", note: "Distributed" },
+      { role: "Cache", tool: "Redis", note: "Session, hot data" },
+      { role: "Tracing", tool: "OpenTelemetry", note: "Jaeger, Grafana" },
+      { role: "K8s", tool: "kube-rs", note: "Operator, CRD" },
+      { role: "Container", tool: "distroless 5MB", note: "Scratch base" },
+    ],
+    pros: "Massive scale, fault-tolerant", cons: "Karmaşık, min 3-5 servis", ideal: "Büyük ölçek, FTTH merkezi, IoT",
+  },
+  {
+    name: "🤖 AI/ML + Rust", tag: "AI Uygulamaları", tagColor: "#06b6d4",
+    desc: "AI model serving + vector search + Rust performansı.",
+    layers: [
+      { role: "API", tool: "Axum", note: "Inference endpoint" },
+      { role: "Vector DB", tool: "Qdrant", note: "Similarity search" },
+      { role: "Search", tool: "Meilisearch", note: "Hybrid search" },
+      { role: "ML", tool: "ort (ONNX)", note: "Model inference" },
+      { role: "Embedding", tool: "candle", note: "Transformer Rust" },
+      { role: "Database", tool: "SurrealDB", note: "ML inference" },
+      { role: "Pipeline", tool: "Tokio streams", note: "Async pipeline" },
+      { role: "Orch", tool: "n8n + webhooks", note: "AI workflow" },
+    ],
+    pros: "Ultra-düşük latency, memory-safe", cons: "ML ekosistemi küçük", ideal: "RAG, real-time AI, n8n AI",
+  },
+  {
+    name: "🔧 Rust JS Tooling", tag: "Build Tools", tagColor: "#ffd93d",
+    desc: "JS projelerinde Rust araçlar. 10-100x hızlı.",
+    layers: [
+      { role: "Bundler", tool: "Rspack / Turbopack", note: "Webpack 10x" },
+      { role: "Transpiler", tool: "SWC", note: "Babel 20x" },
+      { role: "Linter", tool: "oxlint", note: "ESLint 100x" },
+      { role: "Formatter", tool: "Biome", note: "Prettier+ESLint" },
+      { role: "Test", tool: "Vitest", note: "Jest yerine" },
+      { role: "Runtime", tool: "Deno", note: "Node.js alt." },
+      { role: "Pkg Mgr", tool: "pnpm", note: "npm/yarn yerine" },
+    ],
+    pros: "Anında hız, sıfır migration", cons: "Plugin uyumsuzlukları", ideal: "JS hızlandırma, CI/CD opt",
+  },
+];
+
+const gameItems = [
+  { name: "Bevy Engine", desc: "Data-driven ECS. Web, desktop, mobile, VR. 294 contributor. Erken aşama, her 3 ayda breaking.", stars: "37k+", status: "🔥 Popüler", useCase: "Indie, 2D/3D, VR" },
+  { name: "Fyrox", desc: "Geleneksel motor, dahili editör. Bevy'den olgun editör. 3D odaklı.", stars: "8k+", status: "✅ Stabil", useCase: "3D, editör gereken" },
+  { name: "Godot + Rust", desc: "Godot editörü + Rust perf. GDExtension. Pragmatik seçim.", stars: "—", status: "🔧 Pragmatik", useCase: "Production oyun" },
+  { name: "macroquad", desc: "Minimalist 2D. Game jam, prototip. WASM. Basit.", stars: "3k+", status: "🎯 Basit", useCase: "2D, prototipler" },
+  { name: "Bevy Rapier", desc: "Physics. 2D/3D fizik. Bevy entegre. Collision, rigid body.", stars: "2k+", status: "🌀 Physics", useCase: "Fizik, simülasyon" },
+];
+
+/* COMPONENT */
+function RustEcosystemGuide() {
+  const [activeTab, setActiveTab] = useState("whyrust");
+  const [expandedStack, setExpandedStack] = useState(null);
+  const [expandedWhy, setExpandedWhy] = useState("perf");
+
+  const isCategory = categories.find((c) => c.id === activeTab);
+  const isWhyRust = activeTab === "whyrust";
+  const isStacks = activeTab === "stacks";
+  const isGame = activeTab === "game";
+
+  const allTabs = [
+    { id: "whyrust", icon: "🦀", title: "Why Rust?", color: "#e44d26" },
+    ...categories.map((c) => ({ id: c.id, icon: c.icon, title: c.title, color: c.color })),
+    { id: "stacks", icon: "🎯", title: "Sana Özel", color: "#00ff7f" },
+    { id: "game", icon: "🎮", title: "Bonus: Game Dev", color: "#7b68ee" },
+  ];
+
+  const TableComponent = ({ data }) => (
+    <div style={{ overflowX: "auto", marginTop: 12, marginBottom: 6 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+        <thead>
+          <tr>
+            {["", "Rust", "Go", "Node.js", "Java", "Python"].map((h, i) => (
+              <th key={i} style={{ textAlign: i === 0 ? "left" : "center", padding: "7px 6px", borderBottom: "1px solid rgba(255,255,255,0.1)", color: i === 1 ? "#e44d26" : "#6a7394", fontWeight: i === 1 ? 700 : 600, fontSize: 10, letterSpacing: i === 0 ? 0 : "0.5px" }}>
+                {i === 0 ? data.title : h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.rows.map((row, i) => (
+            <tr key={i} style={{ background: i % 2 === 0 ? "rgba(255,255,255,0.012)" : "transparent" }}>
+              <td style={{ padding: "6px 8px", borderBottom: "1px solid rgba(255,255,255,0.03)", color: "#8892b0", fontSize: 11 }}>{row.metric}</td>
+              <td style={{ padding: "6px", borderBottom: "1px solid rgba(255,255,255,0.03)", textAlign: "center", color: "#e44d26", fontWeight: 700, fontSize: 11 }}>{row.rust}</td>
+              {[row.go, row.node, row.java, row.python].map((v, j) => (
+                <td key={j} style={{ padding: "6px", borderBottom: "1px solid rgba(255,255,255,0.03)", textAlign: "center", color: "#6a7394", fontSize: 10.5 }}>{v}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#08080d", color: "#e0ddd5", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', monospace" }}>
+      {/* Header */}
+      <div style={{ background: "linear-gradient(135deg, #0d1117 0%, #161b22 50%, #0d1117 100%)", borderBottom: "2px solid #e44d26", padding: "26px 20px 20px" }}>
+        <div style={{ maxWidth: 1020, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <span style={{ fontSize: 36 }}>🦀</span>
+            <div>
+              <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, color: "#e44d26", letterSpacing: "-0.5px" }}>Rust Ekosistem Rehberi</h1>
+              <p style={{ margin: "2px 0 0", fontSize: 11, color: "#6a7394", letterSpacing: "1.5px", textTransform: "uppercase" }}>2025–2026 • Neden Rust? • Framework'ler • Stack Kombinasyonları</p>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+            {[
+              { l: "Stack Overflow", v: "9 yıl #1 sevilen dil", i: "📊" },
+              { l: "GitHub", v: "Yıllık %40 büyüme", i: "🐙" },
+              { l: "TIOBE", v: "Top 15'e yükseldi", i: "📈" },
+            ].map((s) => (
+              <div key={s.l} style={{ background: "rgba(228,77,38,0.06)", border: "1px solid rgba(228,77,38,0.15)", borderRadius: 7, padding: "6px 12px", flex: "1 1 140px" }}>
+                <div style={{ fontSize: 9, color: "#e44d26", textTransform: "uppercase", letterSpacing: "1px" }}>{s.i} {s.l}</div>
+                <div style={{ fontSize: 11.5, color: "#a8b2d1", marginTop: 1 }}>{s.v}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 1020, margin: "0 auto", padding: "14px 20px 48px" }}>
+        {/* Tabs */}
+        <div style={{ display: "flex", gap: 4, overflowX: "auto", paddingBottom: 6, marginBottom: 18, scrollbarWidth: "thin", scrollbarColor: "#333 transparent" }}>
+          {allTabs.map((tab) => {
+            const a = activeTab === tab.id;
+            return (
+              <button key={tab.id} onClick={() => { setActiveTab(tab.id); setExpandedStack(null); }} style={{
+                background: a ? tab.color + "18" : "rgba(255,255,255,0.02)",
+                border: `1px solid ${a ? tab.color + "55" : "rgba(255,255,255,0.05)"}`,
+                borderRadius: 7, padding: "8px 12px", cursor: "pointer",
+                color: a ? tab.color : "#6a7394", fontSize: 11, fontFamily: "inherit",
+                whiteSpace: "nowrap", transition: "all 0.15s", fontWeight: a ? 700 : 400,
+              }}>
+                <span style={{ marginRight: 4 }}>{tab.icon}</span>{tab.title}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* WHY RUST */}
+        {isWhyRust && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+              <span style={{ fontSize: 28 }}>🦀</span>
+              <div>
+                <h2 style={{ fontSize: 21, color: "#e44d26", margin: 0, fontWeight: 800 }}>Why Rust?</h2>
+                <span style={{ fontSize: 11, color: "#6a7394" }}>Performans, güvenlik, vizyon — neden herkes geçiyor?</span>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 16 }}>
+              {whyRustSections.map((s) => {
+                const a = expandedWhy === s.id;
+                return (
+                  <button key={s.id} onClick={() => setExpandedWhy(s.id)} style={{
+                    background: a ? s.color + "18" : "rgba(255,255,255,0.02)",
+                    border: `1px solid ${a ? s.color + "44" : "rgba(255,255,255,0.05)"}`,
+                    borderRadius: 7, padding: "7px 11px", cursor: "pointer",
+                    color: a ? s.color : "#6a7394", fontSize: 10.5, fontFamily: "inherit",
+                    transition: "all 0.15s", fontWeight: a ? 700 : 400,
+                  }}>
+                    {s.icon} {s.title}
+                  </button>
+                );
+              })}
+            </div>
+
+            {whyRustSections.filter((s) => s.id === expandedWhy).map((section) => (
+              <div key={section.id}>
+                <h3 style={{ fontSize: 17, color: section.color, margin: "0 0 12px", fontWeight: 700 }}>
+                  {section.icon} {section.title}
+                </h3>
+
+                {section.points && section.points.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 6 }}>
+                    {section.points.map((p, i) => (
+                      <div key={i} style={{ background: "rgba(255,255,255,0.015)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 9, padding: "11px 14px", borderLeft: `3px solid ${section.color}40`, fontSize: 12, color: "#a8b2d1", lineHeight: 1.65 }}>
+                        {p}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {section.comparison && <TableComponent data={section.comparison} />}
+
+                {section.adoptions && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 8 }}>
+                    {section.adoptions.map((a, i) => (
+                      <div key={i} style={{ background: "rgba(255,215,0,0.03)", border: "1px solid rgba(255,215,0,0.1)", borderRadius: 10, padding: "12px 14px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                            <span style={{ fontSize: 16 }}>{a.emoji}</span>
+                            <span style={{ fontSize: 14, fontWeight: 700, color: "#ffd700" }}>{a.company}</span>
+                          </div>
+                          <span style={{ fontSize: 10, color: "#4a5580", background: "rgba(255,255,255,0.04)", padding: "2px 6px", borderRadius: 4 }}>{a.year}</span>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                          <span style={{ fontSize: 11, color: "#ff6b6b", background: "rgba(255,107,107,0.1)", padding: "2px 7px", borderRadius: 4 }}>{a.from}</span>
+                          <span style={{ fontSize: 11, color: "#6a7394" }}>→</span>
+                          <span style={{ fontSize: 11, color: "#00ff7f", background: "rgba(0,255,127,0.1)", padding: "2px 7px", borderRadius: 4, fontWeight: 600 }}>{a.to}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "#8892b0", lineHeight: 1.5, marginBottom: 4 }}>
+                          <span style={{ color: "#ff6b6b", fontWeight: 600 }}>Neden: </span>{a.why}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#8892b0", lineHeight: 1.5 }}>
+                          <span style={{ color: "#00ff7f", fontWeight: 600 }}>Sonuç: </span>{a.result}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {section.id === "future" && section.points && section.points.length > 0 && (
+                  <div style={{ marginTop: 14, background: "rgba(168,85,247,0.06)", border: "1px solid rgba(168,85,247,0.15)", borderRadius: 10, padding: "14px 16px" }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#a855f7", marginBottom: 8 }}>📌 Özet: Rust'ın Geleceği Neden Parlak?</div>
+                    <div style={{ fontSize: 12, color: "#8892b0", lineHeight: 1.7 }}>
+                      Büyük şirket desteği (Rust Foundation) + devlet önerisi (NSA/CISA) + Linux kernel entegrasyonu + WASM büyümesi + yıllık %40 GitHub büyüme = Rust'ın 10+ yıl boyunca güçlü kalacağının güçlü sinyalleri. Öğrenme yatırımı geri dönecektir.
+                    </div>
+                  </div>
+                )}
+
+                {section.weaknesses && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {section.weaknesses.map((w, i) => (
+                      <div key={i} style={{ background: "rgba(255,107,107,0.025)", border: "1px solid rgba(255,107,107,0.1)", borderRadius: 10, padding: "14px 16px", borderLeft: `3px solid ${section.color}50` }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#ff6b6b", marginBottom: 5 }}>❌ {w.problem}</div>
+                        <div style={{ fontSize: 12, color: "#6a7394", lineHeight: 1.5, marginBottom: 8 }}>{w.detail}</div>
+                        <div style={{ background: "rgba(0,255,127,0.04)", border: "1px solid rgba(0,255,127,0.1)", borderRadius: 7, padding: "9px 12px", marginBottom: 5 }}>
+                          <div style={{ fontSize: 10, color: "#00ff7f", fontWeight: 700, marginBottom: 3, letterSpacing: "0.5px" }}>💡 KOMBİNASYON TAVSİYESİ</div>
+                          <div style={{ fontSize: 11.5, color: "#a8b2d1", lineHeight: 1.55 }}>{w.combo}</div>
+                        </div>
+                        <div style={{ fontSize: 10.5, color: "#4a5580" }}><span style={{ color: "#06b6d4" }}>🔧</span> {w.tools}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {section.scenarios && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    {section.scenarios.map((s, i) => (
+                      <div key={i} style={{ background: "rgba(255,255,255,0.015)", border: "1px solid rgba(255,255,255,0.04)", borderRadius: 9, padding: "10px 14px", display: "flex", gap: 10, alignItems: "flex-start" }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: s.verdict.includes("✅") ? "#00ff7f" : s.verdict.includes("⚠️") ? "#ffd93d" : "#ff6b6b", whiteSpace: "nowrap", minWidth: 100 }}>{s.verdict}</span>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 600, color: "#e0ddd5" }}>{s.scenario}</div>
+                          <div style={{ fontSize: 11, color: "#6a7394", marginTop: 2, lineHeight: 1.45 }}>{s.reason}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* CATEGORY */}
+        {isCategory && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+              <span style={{ fontSize: 24 }}>{isCategory.icon}</span>
+              <div>
+                <h2 style={{ fontSize: 19, color: isCategory.color, margin: 0, fontWeight: 700 }}>{isCategory.title}</h2>
+                <span style={{ fontSize: 11, color: "#6a7394" }}>{isCategory.subtitle}</span>
+              </div>
+            </div>
+            {isCategory.benchmark && (
+              <div style={{ background: isCategory.color + "0a", border: `1px solid ${isCategory.color}1a`, borderRadius: 7, padding: "8px 13px", margin: "10px 0 14px", fontSize: 11.5, color: "#8892b0", lineHeight: 1.5 }}>
+                <span style={{ color: isCategory.color, fontWeight: 700 }}>📊 </span>{isCategory.benchmark}
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+              {isCategory.items.map((item) => (
+                <div key={item.name} style={{ background: "rgba(255,255,255,0.015)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 9, padding: "12px 14px", borderLeft: `3px solid ${isCategory.color}40` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 5 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: "#e0ddd5" }}>{item.name}</span>
+                      {item.stars && <span style={{ fontSize: 9.5, color: "#4a5580", background: "rgba(255,255,255,0.04)", padding: "1px 5px", borderRadius: 3 }}>⭐{item.stars}</span>}
+                    </div>
+                    <span style={{ fontSize: 10.5, color: isCategory.color, fontWeight: 600 }}>{item.status}</span>
+                  </div>
+                  <p style={{ fontSize: 12, color: "#8892b0", margin: "5px 0 0", lineHeight: 1.55 }}>{item.desc}</p>
+                  {item.useCase && <div style={{ marginTop: 5, fontSize: 10.5, color: "#4a5580" }}><span style={{ color: isCategory.color }}>→</span> {item.useCase}</div>}
+                </div>
+              ))}
+            </div>
+            {/* AI/ML Extra: Comparison Table + Pipeline */}
+            {isCategory.aiExtra && (
+              <div style={{ marginTop: 16 }}>
+                <TableComponent data={isCategory.aiExtra.comparison} />
+                <div style={{ marginTop: 16 }}>
+                  <h4 style={{ fontSize: 13, color: "#06b6d4", margin: "0 0 10px", fontWeight: 700 }}>🔄 Önerilen AI/ML Pipeline</h4>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {isCategory.aiExtra.pipeline.map((p, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, background: "rgba(6,182,212,0.04)", border: "1px solid rgba(6,182,212,0.1)", borderRadius: 7, padding: "8px 12px" }}>
+                        <span style={{ fontSize: 11, color: "#06b6d4", fontWeight: 700, minWidth: 80 }}>{p.phase}</span>
+                        <span style={{ fontSize: 12, color: "#e0ddd5", fontWeight: 600, minWidth: 140 }}>{p.tool}</span>
+                        <span style={{ fontSize: 11, color: "#6a7394" }}>{p.note}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* STACKS */}
+        {isStacks && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+              <span style={{ fontSize: 28 }}>🎯</span>
+              <div>
+                <h2 style={{ fontSize: 21, color: "#00ff7f", margin: 0, fontWeight: 800 }}>Sana Özel Stack Kombinasyonları</h2>
+                <span style={{ fontSize: 11, color: "#6a7394" }}>Senaryoya göre hazır paket önerileri</span>
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {stacks.map((stack, idx) => {
+                const exp = expandedStack === idx;
+                return (
+                  <div key={idx} style={{ background: "rgba(255,255,255,0.015)", border: `1px solid ${exp ? stack.tagColor + "44" : "rgba(255,255,255,0.05)"}`, borderRadius: 11, overflow: "hidden", transition: "border-color 0.2s" }}>
+                    <div onClick={() => setExpandedStack(exp ? null : idx)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", cursor: "pointer", background: exp ? stack.tagColor + "08" : "transparent" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 18 }}>{stack.name.split(" ")[0]}</span>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "#e0ddd5" }}>{stack.name.substring(stack.name.indexOf(" ") + 1)}</div>
+                          <div style={{ fontSize: 11, color: "#6a7394", marginTop: 1 }}>{stack.desc}</div>
+                        </div>
+                      </div>
+                      <span style={{ background: stack.tagColor + "22", color: stack.tagColor, padding: "4px 10px", borderRadius: 5, fontSize: 10.5, fontWeight: 600 }}>{stack.tag}</span>
+                    </div>
+                    {exp && (
+                      <div style={{ padding: "0 16px 16px" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 6, marginBottom: 12 }}>
+                          {stack.layers.map((l, i) => (
+                            <div key={i} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)", borderRadius: 7, padding: "8px 10px" }}>
+                              <div style={{ fontSize: 9, color: "#4a5580", textTransform: "uppercase", letterSpacing: "0.5px" }}>{l.role}</div>
+                              <div style={{ fontSize: 12, color: stack.tagColor, fontWeight: 600, marginTop: 2 }}>{l.tool}</div>
+                              <div style={{ fontSize: 10, color: "#6a7394", marginTop: 1 }}>{l.note}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <div style={{ flex: "1 1 200px", background: "rgba(0,255,127,0.04)", border: "1px solid rgba(0,255,127,0.1)", borderRadius: 7, padding: "8px 12px" }}>
+                            <div style={{ fontSize: 10, color: "#00ff7f", fontWeight: 700 }}>✅ Avantaj</div>
+                            <div style={{ fontSize: 11, color: "#8892b0", marginTop: 2 }}>{stack.pros}</div>
+                          </div>
+                          <div style={{ flex: "1 1 200px", background: "rgba(255,107,107,0.04)", border: "1px solid rgba(255,107,107,0.1)", borderRadius: 7, padding: "8px 12px" }}>
+                            <div style={{ fontSize: 10, color: "#ff6b6b", fontWeight: 700 }}>⚠️ Dikkat</div>
+                            <div style={{ fontSize: 11, color: "#8892b0", marginTop: 2 }}>{stack.cons}</div>
+                          </div>
+                          <div style={{ flex: "1 1 200px", background: "rgba(6,182,212,0.04)", border: "1px solid rgba(6,182,212,0.1)", borderRadius: 7, padding: "8px 12px" }}>
+                            <div style={{ fontSize: 10, color: "#06b6d4", fontWeight: 700 }}>🎯 İdeal</div>
+                            <div style={{ fontSize: 11, color: "#8892b0", marginTop: 2 }}>{stack.ideal}</div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* GAME DEV */}
+        {isGame && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+              <span style={{ fontSize: 24 }}>🎮</span>
+              <div>
+                <h2 style={{ fontSize: 19, color: "#7b68ee", margin: 0, fontWeight: 700 }}>Bonus: Game Dev</h2>
+                <span style={{ fontSize: 11, color: "#6a7394" }}>Rust ile oyun geliştirme (bonus alan)</span>
+              </div>
+            </div>
+            <div style={{ background: "#7b68ee0a", border: "1px solid #7b68ee1a", borderRadius: 7, padding: "8px 13px", margin: "10px 0 14px", fontSize: 11.5, color: "#8892b0", lineHeight: 1.5 }}>
+              <span style={{ color: "#7b68ee", fontWeight: 700 }}>📊 </span>Bevy: 37k+ GitHub stars. Rust game dev'in en popüler seçimi.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+              {gameItems.map((item) => (
+                <div key={item.name} style={{ background: "rgba(255,255,255,0.015)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 9, padding: "12px 14px", borderLeft: "3px solid #7b68ee40" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 5 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: "#e0ddd5" }}>{item.name}</span>
+                      {item.stars && <span style={{ fontSize: 9.5, color: "#4a5580", background: "rgba(255,255,255,0.04)", padding: "1px 5px", borderRadius: 3 }}>⭐{item.stars}</span>}
+                    </div>
+                    <span style={{ fontSize: 10.5, color: "#7b68ee", fontWeight: 600 }}>{item.status}</span>
+                  </div>
+                  <p style={{ fontSize: 12, color: "#8892b0", margin: "5px 0 0", lineHeight: 1.55 }}>{item.desc}</p>
+                  {item.useCase && <div style={{ marginTop: 5, fontSize: 10.5, color: "#4a5580" }}><span style={{ color: "#7b68ee" }}>→</span> {item.useCase}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<RustEcosystemGuide />);
+  </script>
+</body>
+</html>

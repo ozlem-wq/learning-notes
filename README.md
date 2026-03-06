@@ -36,4 +36,4 @@ learning-notes/
 
 ---
 
-*Bu repo Ayaz ile birlikte yürütülen öğrenme sürecinin bir parçasıdır.*
+
